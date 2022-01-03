@@ -3,14 +3,19 @@
 #include "core2forAWS.h"
 
 static void tab_event_cb(lv_obj_t* slider, lv_event_t event);
+
 void display_home_tab(lv_obj_t* tv);
+void battery_task(void* pvParameters);
+void clock_task(void* pvParameters);
+void sensors_task(void*);
+
+void get_rtctime();
 
 static lv_obj_t* tab_view;
 
 void app_main() {
   ESP_LOGI("Main", "Startup");
 
-  /*
   esp_err_t ret = nvs_flash_init();
   if (ret == ESP_ERR_NVS_NO_FREE_PAGES || ret == ESP_ERR_NVS_NEW_VERSION_FOUND) {
     ESP_ERROR_CHECK(nvs_flash_erase());
@@ -20,24 +25,30 @@ void app_main() {
 
   esp_log_level_set("gpio", ESP_LOG_NONE);
   esp_log_level_set("ILI9341", ESP_LOG_NONE);
-  */
 
   Core2ForAWS_Init();
   Core2ForAWS_Display_SetBrightness(80); // Last since the display first needs time to finish initializing.
+  get_rtctime();
 
   ESP_LOGI("Main", "Create tabs");
 
-  xSemaphoreTake(xGuiSemaphore, portMAX_DELAY);   // Takes (blocks) the xGuiSemaphore mutex from being read/written by another task.
+  xSemaphoreTake(xGuiSemaphore, portMAX_DELAY);
   lv_obj_t* core2forAWS_obj = lv_obj_create(NULL, NULL); // Create a object to draw all with no parent
   lv_scr_load_anim(core2forAWS_obj, LV_SCR_LOAD_ANIM_MOVE_LEFT, 400, 0, false);   // Animates the loading of core2forAWS_obj as a slide into view from the left
   tab_view = lv_tabview_create(core2forAWS_obj, NULL); // Creates the tab view to display different tabs with different hardware features
   lv_obj_set_event_cb(tab_view, tab_event_cb); // Add a callback for whenever there is an event triggered on the tab_view object (e.g. a left-to-right swipe)
   lv_tabview_set_btns_pos(tab_view, LV_TABVIEW_TAB_POS_NONE);  // Hide the tab buttons so it looks like a clean screen
 
-  xSemaphoreGive(xGuiSemaphore);  // Frees the xGuiSemaphore so that another task can use it. In this case, the higher priority guiTask will take it and then read the values to then display.
+  xSemaphoreGive(xGuiSemaphore);
+
+  xTaskCreatePinnedToCore(sensors_task, "sensorsTask", 4096, 0, 1, 0, 1);
 
   ESP_LOGI("Main", "Init tabs");
   display_home_tab(tab_view);
+
+  xTaskCreatePinnedToCore(battery_task, "batteryTask", configMINIMAL_STACK_SIZE * 2, (void*) tab_view, 0, 0, 1);
+  xTaskCreatePinnedToCore(clock_task, "clockTask", configMINIMAL_STACK_SIZE * 3, (void*) tab_view, 0, 0, 1);
+
 }
 
 static void tab_event_cb(lv_obj_t* slider, lv_event_t event){
